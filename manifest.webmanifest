@@ -1,0 +1,9 @@
+{
+  "name": "VibeScout",
+  "short_name": "VibeScout",
+  "description": "Discover the local pulse, online or offline.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fffaf6",
+  "theme_color": "#ff5d42"
+}
