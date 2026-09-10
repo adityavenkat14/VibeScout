@@ -1,270 +1,187 @@
-// --- STATE & PERSISTENCE CONFIGURATION ---
-const STORAGE_KEY_POSTS = 'vibescout_posts_data';
-const STORAGE_KEY_USER_ID = 'vibescout_anon_uid';
-const STORAGE_KEY_SAVED = 'vibescout_saved_ids';
+import "./style.css";
+import { watchDiscoveries, addDiscovery, watchSavedIds, toggleSaved, toggleReaction } from "./firebase.js";
 
-// Anonymous UID Assignment
-let currentUserId = localStorage.getItem(STORAGE_KEY_USER_ID);
-if (!currentUserId) {
-  currentUserId = 'anon_' + Math.random().toString(36).substring(2, 10);
-  localStorage.setItem(STORAGE_KEY_USER_ID, currentUserId);
-}
-
-let savedPostIds = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY_SAVED) || '[]'));
-let activeFilter = 'all';
-let currentBase64Image = null;
-
-// Initial Local Store Fallback
-function getStoredPosts() {
-  const data = localStorage.getItem(STORAGE_KEY_POSTS);
-  return data ? JSON.parse(data) : [];
-}
-
-function persistPosts(posts) {
-  localStorage.setItem(STORAGE_KEY_POSTS, JSON.stringify(posts));
-}
-
-// --- DOM ELEMENTS ---
-const feedList = document.getElementById('feed-list');
-const modalOverlay = document.getElementById('modal-overlay');
-const openModalBtn = document.getElementById('open-modal-btn');
-const closeModalBtn = document.getElementById('close-modal-btn');
-const cancelBtn = document.getElementById('cancel-btn');
-const discoveryForm = document.getElementById('discovery-form');
-const mapBtn = document.getElementById('map-btn');
-const seedBtn = document.getElementById('seed-btn');
-const statusBadge = document.getElementById('connection-status');
-const photoInput = document.getElementById('post-photo');
-const previewContainer = document.getElementById('photo-preview-container');
-const previewImg = document.getElementById('photo-preview');
-const filterPills = document.querySelectorAll('.filter-pill');
-
-// --- NETWORK STATUS TRACKING ---
-function updateOnlineStatus() {
-  if (navigator.onLine) {
-    statusBadge.textContent = '🟢 Live Sync';
-    statusBadge.className = 'status-badge online';
-  } else {
-    statusBadge.textContent = '🟠 Offline Mode';
-    statusBadge.className = 'status-badge offline';
-  }
-}
-window.addEventListener('online', updateOnlineStatus);
-window.addEventListener('offline', updateOnlineStatus);
-updateOnlineStatus();
-
-// --- IMAGE COMPRESSION LOGIC ---
-photoInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (!file) {
-    currentBase64Image = null;
-    previewContainer.classList.add('hidden');
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    const img = new Image();
-    img.onload = () => {
-      // Scale down image to 500px width max for tiny payload footprint
-      const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 500;
-      const scale = MAX_WIDTH / img.width;
-      canvas.width = MAX_WIDTH;
-      canvas.height = img.height * scale;
-
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      currentBase64Image = canvas.toDataURL('image/jpeg', 0.65);
-      previewImg.src = currentBase64Image;
-      previewContainer.classList.remove('hidden');
-    };
-    img.src = event.target.result;
-  };
-  reader.readAsDataURL(file);
-});
-
-// --- RENDER FEED ---
-function renderFeed() {
-  const posts = getStoredPosts();
-  feedList.innerHTML = '';
-
-  const filtered = activeFilter === 'all' 
-    ? posts 
-    : posts.filter(p => p.category.toLowerCase() === activeFilter.toLowerCase());
-
-  if (filtered.length === 0) {
-    feedList.innerHTML = `<div style="text-align:center; padding: 40px; color: #808e9b;">No vibes here yet. Be the first to share one!</div>`;
-    return;
-  }
-
-  const now = Date.now();
-
-  filtered.forEach(post => {
-    const isConfirmed = (post.reactions || 0) >= 3;
-    const isSaved = savedPostIds.has(post.id);
-    const ageMinutes = Math.floor((now - post.timestamp) / (1000 * 60));
-    const isStale = ageMinutes >= 180; // 3 hours
-
-    const card = document.createElement('div');
-    card.className = `card ${isStale ? 'faded' : ''}`;
-
-    // Google Maps Search link generator
-    const mapsQuery = encodeURIComponent(`${post.venue} BITS Pilani Dubai Campus`);
-    const directionsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
-
-    card.innerHTML = `
-      <div class="card-header">
-        <div>
-          <h3>${post.title}</h3>
-          <div class="card-venue">
-            📍 ${post.venue} 
-            <a href="${directionsUrl}" target="_blank" rel="noopener noreferrer" class="directions-link">Directions →</a>
-          </div>
-        </div>
-        ${isConfirmed ? '<span class="badge-confirmed">✓ Confirmed</span>' : ''}
-      </div>
-
-      <p style="font-size: 0.9rem; margin-top: 6px;">${post.description || ''}</p>
-
-      ${post.photo ? `<img src="${post.photo}" alt="${post.title}" class="card-image" loading="lazy" />` : ''}
-
-      <div class="card-footer">
-        <span style="font-size: 0.75rem; color: #808e9b;">${ageMinutes < 1 ? 'Just now' : `${ageMinutes}m ago`}</span>
-        <div class="footer-actions">
-          <button class="action-btn react-btn" data-id="${post.id}">
-            🔥 <span class="react-count">${post.reactions || 0}</span>
-          </button>
-          <button class="action-btn bookmark-btn ${isSaved ? 'saved' : ''}" data-id="${post.id}">
-            ${isSaved ? '♥ Saved' : '♡ Save'}
-          </button>
-        </div>
-      </div>
-    `;
-
-    feedList.appendChild(card);
-  });
-
-  // Attach Reaction Click Handlers
-  document.querySelectorAll('.react-btn').forEach(btn => {
-    btn.onclick = () => handleReaction(btn.dataset.id);
-  });
-
-  // Attach Bookmark Click Handlers
-  document.querySelectorAll('.bookmark-btn').forEach(btn => {
-    btn.onclick = () => handleSaveToggle(btn.dataset.id);
-  });
-}
-
-// --- REACTIONS & SAVES ---
-function handleReaction(id) {
-  const posts = getStoredPosts();
-  const target = posts.find(p => p.id === id);
-  if (target) {
-    target.reactions = (target.reactions || 0) + 1;
-    persistPosts(posts);
-    renderFeed();
-  }
-}
-
-function handleSaveToggle(id) {
-  if (savedPostIds.has(id)) {
-    savedPostIds.delete(id);
-  } else {
-    savedPostIds.add(id);
-  }
-  localStorage.setItem(STORAGE_KEY_SAVED, JSON.stringify(Array.from(savedPostIds)));
-  renderFeed();
-}
-
-// --- POST SUBMISSION ---
-discoveryForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-
-  const newPost = {
-    id: 'post_' + Date.now(),
-    title: document.getElementById('post-title').value.trim(),
-    category: document.getElementById('post-category').value,
-    venue: document.getElementById('post-venue').value.trim(),
-    description: document.getElementById('post-desc').value.trim(),
-    photo: currentBase64Image || null,
-    reactions: 0,
-    timestamp: Date.now(),
-    createdBy: currentUserId
-  };
-
-  const posts = getStoredPosts();
-  posts.unshift(newPost);
-  persistPosts(posts);
-
-  // Form Reset
-  discoveryForm.reset();
-  currentBase64Image = null;
-  previewContainer.classList.add('hidden');
-  modalOverlay.classList.add('hidden');
-
-  renderFeed();
-});
-
-// --- FILTER HANDLING ---
-filterPills.forEach(pill => {
-  pill.addEventListener('click', () => {
-    filterPills.forEach(p => p.classList.remove('active'));
-    pill.classList.add('active');
-    activeFilter = pill.dataset.category;
-    renderFeed();
-  });
-});
-
-// --- SEED SAMPLE DATA ---
-seedBtn.addEventListener('click', () => {
-  const samplePosts = [
-    {
-      id: 'demo_1',
-      title: 'Free Karak Chai & Donuts',
-      category: 'food',
-      venue: 'Student Lounge - Ground Floor',
-      description: 'ACM-W table has hot chai and snacks running for the next 30 minutes!',
-      reactions: 4,
-      timestamp: Date.now() - 1000 * 60 * 12,
-      photo: null
-    },
-    {
-      id: 'demo_2',
-      title: 'Open Robotics Arena Demo',
-      category: 'events',
-      venue: 'Main Auditorium Foyer',
-      description: 'Robo-soccer match happening right now. Come watch the autonomous matches.',
-      reactions: 3,
-      timestamp: Date.now() - 1000 * 60 * 35,
-      photo: null
-    },
-    {
-      id: 'demo_3',
-      title: 'Quiet Study Tables Free',
-      category: 'study',
-      venue: 'Library 2nd Floor West Wing',
-      description: 'Back pods are completely empty and have power outlets functional.',
-      reactions: 1,
-      timestamp: Date.now() - 1000 * 60 * 55,
-      photo: null
-    }
-  ];
-
-  persistPosts(samplePosts);
-  renderFeed();
-});
-
-// --- MODAL TOGGLES ---
-openModalBtn.onclick = () => modalOverlay.classList.remove('hidden');
-closeModalBtn.onclick = () => modalOverlay.classList.add('hidden');
-cancelBtn.onclick = () => modalOverlay.classList.add('hidden');
-
-// Header Map Button Target
-mapBtn.onclick = () => {
-  window.open('https://www.google.com/maps/search/?api=1&query=BITS+Pilani+Dubai+Campus', '_blank');
+const store = {
+  get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+  set(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
 };
 
-// Initial Render
-renderFeed();
+let state = {
+  tab: "discover",
+  filter: "For you",
+  online: navigator.onLine,
+  loading: true, // true until the first Firestore snapshot arrives
+  discoveries: [], // now populated live from Firebase, not seeded locally
+  savedIds: new Set(), // populated live from users/{uid}/saved in Firestore — follows this device's identity
+  liked: new Set(store.get("vibescout-liked", [])), // "did I tap the reaction button" — local UI convenience only
+  toast: ""
+};
+
+const app = document.querySelector("#app");
+const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+
+function persist() {
+  // Only the "did I tap like" convenience set stays local — saved spots and
+  // discoveries both live in Firestore now, so they survive reinstalls/tabs.
+  store.set("vibescout-liked", [...state.liked]);
+}
+
+function timeAgo(timestamp) {
+  if (!timestamp?.toDate) return null;
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp.toDate().getTime()) / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function isFading(timestamp) {
+  if (!timestamp?.toDate) return false;
+  return (Date.now() - timestamp.toDate().getTime()) / 60000 > 180; // fades after 3 hours
+}
+
+function showToast(message) {
+  state.toast = message;
+  render();
+  window.setTimeout(() => { state.toast = ""; render(); }, 2600);
+}
+
+function favouriteIcon(id) {
+  return state.savedIds.has(id) ? "♥" : "♡";
+}
+
+function card(item) {
+  const saved = state.savedIds.has(item.id);
+  const liked = state.liked.has(item.id);
+  const reactionCount = item.reactionCount || 0;
+  const confirmed = reactionCount >= 3;
+  const fresh = timeAgo(item.createdAt) || item.time || "Just now";
+  const fading = isFading(item.createdAt);
+  return `<article class="vibe-card ${item.accent || "orange"} ${fading ? "is-fading" : ""}">
+    <div class="card-visual"><span>${item.emoji || "✨"}</span><div class="visual-glow"></div><span class="live-pill">${fresh}</span>${confirmed ? `<span class="confirmed-pill">✓ Confirmed</span>` : ""}</div>
+    <div class="card-body">
+      <div class="card-meta"><span>${item.category}</span><span>•</span><span>${item.distance || "Near you"}</span></div>
+      <div class="card-title-row"><h3>${escapeHtml(item.title)}</h3><button class="heart ${saved ? "is-saved" : ""}" data-save="${item.id}" aria-label="Save ${escapeHtml(item.title)}">${favouriteIcon(item.id)}</button></div>
+      <p class="venue">📍 ${escapeHtml(item.venue)} <a class="directions-link" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.venue + " BITS Pilani Dubai Campus")}" target="_blank" rel="noopener">Directions →</a></p>
+      <p class="description">${escapeHtml(item.description || "")}</p>
+      <div class="card-footer"><button class="react-button ${liked ? "is-liked" : ""}" data-react="${item.id}" aria-label="React to ${escapeHtml(item.title)}">🔥 ${reactionCount}</button><button class="share-button" data-share="${item.id}">Share</button></div>
+    </div>
+  </article>`;
+}
+
+function skeletonCard() {
+  return `<div class="vibe-card skeleton"><div class="card-visual"></div><div class="card-body"><div class="sk-line sk-meta"></div><div class="sk-line sk-title"></div><div class="sk-line sk-desc"></div></div></div>`;
+}
+
+function discoverView() {
+  const filtered = state.filter === "For you" ? state.discoveries : state.discoveries.filter((x) => x.category === state.filter);
+  return `<main>
+    <section class="hero">
+      <div><p class="eyebrow">YOUR LOCAL PULSE</p><h1>Good things are<br><em>happening nearby.</em></h1><p class="hero-copy">Fresh finds from your community, even when the signal disappears.</p></div>
+      <div class="avatar-stack"><span>🧑🏽</span><span>👩🏻</span><span>🧑🏾</span><b>+24</b></div>
+    </section>
+    ${!state.online ? `<section class="offline-banner"><span>☁</span><div><b>You're offline</b><small>Showing your cached local finds — anything you add will sync once you're back online</small></div></section>` : `<section class="pulse-banner"><span>✦</span><div><b>Live nearby pulse</b><small>Updates in real time as people nearby discover things</small></div><span class="pulse-dot"></span></section>`}
+    <div class="section-head"><h2>Explore nearby</h2><button class="map-button" data-open-campus-map>⌖ Map</button></div>
+    <div class="filters">${["For you", "Food", "Music", "Study", "Sport"].map((filter) => `<button data-filter="${filter}" class="filter ${state.filter === filter ? "active" : ""}">${filter}</button>`).join("")}</div>
+    <section class="cards">${state.loading ? Array.from({ length: 3 }, skeletonCard).join("") : filtered.length ? filtered.map(card).join("") : `<div class="empty"><span>🔎</span><h3>No vibes here yet</h3><p>Try another category or add the first find.</p></div>`}</section>
+  </main>`;
+}
+
+function savedView() {
+  const saved = state.discoveries.filter((x) => state.savedIds.has(x.id));
+  return `<main class="saved-page"><section class="simple-hero"><p class="eyebrow">YOUR COLLECTION</p><h1>Saved <em>for later.</em></h1><p>These are always with you, online or off.</p></section><section class="cards">${saved.length ? saved.map(card).join("") : `<div class="empty"><span>♡</span><h3>Nothing saved yet</h3><p>Tap the heart on a vibe you want to revisit.</p><button class="primary" data-tab="discover">Discover nearby</button></div>`}</section></main>`;
+}
+
+function addView() {
+  return `<main class="add-page"><section class="simple-hero"><p class="eyebrow">SHARE THE PULSE</p><h1>Found something<br><em>worth sharing?</em></h1><p>Your neighbours will thank you.</p></section>
+  <form id="add-form" class="add-form"><label>What did you find?<input required name="title" maxlength="55" placeholder="e.g. Free matcha at the food court" /></label><label>Where is it?<input required name="venue" maxlength="55" placeholder="e.g. Student Centre" /></label><div class="form-row"><label>Category<select name="category"><option>Food</option><option>Music</option><option>Study</option><option>Sport</option><option>Event</option></select></label><label>When?<input required name="time" maxlength="28" placeholder="e.g. Happening now" /></label></div><label>Tell people why it's good <span>(optional)</span><textarea name="description" maxlength="160" placeholder="A small detail makes a great discovery."></textarea></label><div class="location-row"><span>⌖</span><div><b>Near your current location</b><small>Campus, Dubai</small></div><span class="check">✓</span></div><button class="primary" type="submit">${state.online ? "Share with nearby people" : "Save for when you're online"}</button><p class="form-note">${state.online ? "✦ Your discovery will appear in the live community feed." : "☁ This will be safely queued and shared as soon as you're connected."}</p></form></main>`;
+}
+
+function bottomNav() {
+  return `<nav class="bottom-nav"><button data-tab="discover" class="${state.tab === "discover" ? "active" : ""}"><span>⌂</span>Discover</button><button class="nav-add" data-tab="add" aria-label="Add a vibe">+</button><button data-tab="saved" class="${state.tab === "saved" ? "active" : ""}"><span>♡</span>Saved</button></nav>`;
+}
+
+function render() {
+  const view = state.tab === "discover" ? discoverView() : state.tab === "saved" ? savedView() : addView();
+  app.innerHTML = `<div class="app-shell"><header><a class="brand" href="#" data-tab="discover"><span class="brand-mark">✦</span>vibe<span>scout</span></a><div class="header-right"><button class="online-toggle" data-online>${state.online ? "● Live" : "☁ Offline"}</button><button class="profile" aria-label="Profile">M</button></div></header>${view}${bottomNav()}${state.toast ? `<div class="toast">${state.toast}</div>` : ""}</div>`;
+}
+
+document.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-tab]")?.dataset.tab;
+  if (tab) { event.preventDefault(); state.tab = tab; render(); return; }
+  const filter = event.target.closest("[data-filter]")?.dataset.filter;
+  if (filter) { state.filter = filter; render(); return; }
+  const save = event.target.closest("[data-save]")?.dataset.save;
+  if (save) {
+    const isSaved = state.savedIds.has(save);
+    // Optimistic — the live users/{uid}/saved listener will confirm this in ~milliseconds,
+    // but flipping locally first keeps the tap feeling instant, online or off.
+    isSaved ? state.savedIds.delete(save) : state.savedIds.add(save);
+    render();
+    toggleSaved(save, isSaved).catch((err) => console.error("toggleSaved failed:", err));
+    return;
+  }
+  const react = event.target.closest("[data-react]")?.dataset.react;
+  if (react) {
+    const alreadyLiked = state.liked.has(react);
+    state.liked = alreadyLiked ? new Set([...state.liked].filter((id) => id !== react)) : new Set([...state.liked, react]);
+    persist();
+    render();
+    toggleReaction(react, alreadyLiked).catch((err) => console.error("toggleReaction failed:", err));
+    return;
+  }
+  if (event.target.closest("[data-open-campus-map]")) {
+    window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("BITS Pilani Dubai Campus"), "_blank", "noopener");
+    return;
+  }
+  if (event.target.closest("[data-online]")) { state.online = !state.online; render(); showToast(state.online ? "Back online" : "Offline mode on — your finds are safe"); }
+  if (event.target.closest("[data-share]")) showToast("Link copied — invite someone to this vibe!");
+});
+
+document.addEventListener("submit", (event) => {
+  if (event.target.id !== "add-form") return;
+  event.preventDefault();
+  const data = new FormData(event.target);
+  const item = {
+    title: data.get("title"),
+    venue: data.get("venue"),
+    category: data.get("category"),
+    time: data.get("time"),
+    description: data.get("description") || "A fresh find from someone nearby.",
+    emoji: "✨",
+    accent: "orange",
+    distance: "Near you",
+    people: 1,
+    reactionCount: 0
+  };
+  // Firestore handles offline queueing on its own — this call succeeds
+  // even with no signal, and syncs automatically once reconnected.
+  addDiscovery(item);
+  event.target.reset();
+  state.tab = "discover";
+  showToast(state.online ? "✨ Shared with people nearby" : "☁ Saved safely — it will sync when online");
+  render();
+});
+
+window.addEventListener("online", () => { state.online = true; render(); });
+window.addEventListener("offline", () => { state.online = false; render(); });
+if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js"));
+
+// Live subscription — fires immediately with cached data (even offline),
+// then again automatically every time Firestore has new data.
+watchDiscoveries((discoveries) => {
+  state.discoveries = discoveries;
+  state.loading = false;
+  render();
+});
+
+// Live subscription to this (anonymous) device's saved spots — real
+// Firestore data, not localStorage, so it's offline-safe and consistent
+// with how discoveries and reactions sync.
+watchSavedIds((savedIds) => {
+  state.savedIds = savedIds;
+  render();
+});
+
+render();
