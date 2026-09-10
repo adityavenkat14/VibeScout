@@ -63,7 +63,7 @@ function card(item) {
     <div class="card-body">
       <div class="card-meta"><span>${item.category}</span><span>•</span><span>${item.distance || "Near you"}</span></div>
       <div class="card-title-row"><h3>${escapeHtml(item.title)}</h3><button class="heart ${saved ? "is-saved" : ""}" data-save="${item.id}" aria-label="Save ${escapeHtml(item.title)}">${favouriteIcon(item.id)}</button></div>
-      <p class="venue">📍 ${escapeHtml(item.venue)}</p>
+      <p class="venue">📍 ${escapeHtml(item.venue)} <a class="directions-link" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.venue + " BITS Pilani Dubai Campus")}" target="_blank" rel="noopener">Directions →</a></p>
       <p class="description">${escapeHtml(item.description || "")}</p>
       <div class="card-footer"><button class="react-button ${liked ? "is-liked" : ""}" data-react="${item.id}" aria-label="React to ${escapeHtml(item.title)}">🔥 ${reactionCount}</button><button class="share-button" data-share="${item.id}">Share</button></div>
     </div>
@@ -82,7 +82,7 @@ function discoverView() {
       <div class="avatar-stack"><span>🧑🏽</span><span>👩🏻</span><span>🧑🏾</span><b>+24</b></div>
     </section>
     ${!state.online ? `<section class="offline-banner"><span>☁</span><div><b>You're offline</b><small>Showing your cached local finds — anything you add will sync once you're back online</small></div></section>` : `<section class="pulse-banner"><span>✦</span><div><b>Live nearby pulse</b><small>Updates in real time as people nearby discover things</small></div><span class="pulse-dot"></span></section>`}
-    <div class="section-head"><h2>Explore nearby</h2><button class="map-button">⌖ Map</button></div>
+    <div class="section-head"><h2>Explore nearby</h2><button class="map-button" data-open-campus-map>⌖ Map</button></div>
     <div class="filters">${["For you", "Food", "Music", "Study", "Sport"].map((filter) => `<button data-filter="${filter}" class="filter ${state.filter === filter ? "active" : ""}">${filter}</button>`).join("")}</div>
     <section class="cards">${state.loading ? Array.from({ length: 3 }, skeletonCard).join("") : filtered.length ? filtered.map(card).join("") : `<div class="empty"><span>🔎</span><h3>No vibes here yet</h3><p>Try another category or add the first find.</p></div>`}</section>
   </main>`;
@@ -129,6 +129,10 @@ document.addEventListener("click", (event) => {
     persist();
     render();
     toggleReaction(react, alreadyLiked).catch((err) => console.error("toggleReaction failed:", err));
+    return;
+  }
+  if (event.target.closest("[data-open-campus-map]")) {
+    window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("BITS Pilani Dubai Campus"), "_blank", "noopener");
     return;
   }
   if (event.target.closest("[data-online]")) { state.online = !state.online; render(); showToast(state.online ? "Back online" : "Offline mode on — your finds are safe"); }
