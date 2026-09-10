@@ -51,6 +51,41 @@ function favouriteIcon(id) {
   return state.savedIds.has(id) ? "♥" : "♡";
 }
 
+// --- Photo helpers -----------------------------------------------------
+// We store photos as compressed base64 data URLs directly on the Firestore
+// document (no Firebase Storage, which now requires a billing account).
+// Firestore documents cap out at 1MB, so we resize + compress client-side,
+// and retry smaller if the first pass is still too big.
+async function encodeImage(file, maxWidth, quality) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxWidth / bitmap.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function compressAndEncode(file) {
+  if (!file || !file.size) return null;
+  let dataUrl = await encodeImage(file, 900, 0.75);
+  if (dataUrl.length > 700_000) dataUrl = await encodeImage(file, 600, 0.5); // still too big — shrink harder
+  return dataUrl;
+}
+
+function clearPhotoPreview() {
+  const input = document.getElementById("add-photo-input");
+  const preview = document.getElementById("photo-preview");
+  if (input) input.value = "";
+  if (preview) preview.innerHTML = "";
+}
+
 function card(item) {
   const saved = state.savedIds.has(item.id);
   const liked = state.liked.has(item.id);
@@ -59,7 +94,7 @@ function card(item) {
   const fresh = timeAgo(item.createdAt) || item.time || "Just now";
   const fading = isFading(item.createdAt);
   return `<article class="vibe-card ${item.accent || "orange"} ${fading ? "is-fading" : ""}">
-    <div class="card-visual"><span>${item.emoji || "✨"}</span><div class="visual-glow"></div><span class="live-pill">${fresh}</span>${confirmed ? `<span class="confirmed-pill">✓ Confirmed</span>` : ""}</div>
+    <div class="card-visual ${item.photoURL ? "has-photo" : ""}">${item.photoURL ? `<img class="card-photo" src="${item.photoURL}" alt="${escapeHtml(item.title)}" />` : `<span>${item.emoji || "✨"}</span>`}<div class="visual-glow"></div><span class="live-pill">${fresh}</span>${confirmed ? `<span class="confirmed-pill">✓ Confirmed</span>` : ""}</div>
     <div class="card-body">
       <div class="card-meta"><span>${item.category}</span><span>•</span><span>${item.distance || "Near you"}</span></div>
       <div class="card-title-row"><h3>${escapeHtml(item.title)}</h3><button class="heart ${saved ? "is-saved" : ""}" data-save="${item.id}" aria-label="Save ${escapeHtml(item.title)}">${favouriteIcon(item.id)}</button></div>
@@ -95,7 +130,7 @@ function savedView() {
 
 function addView() {
   return `<main class="add-page"><section class="simple-hero"><p class="eyebrow">SHARE THE PULSE</p><h1>Found something<br><em>worth sharing?</em></h1><p>Your neighbours will thank you.</p></section>
-  <form id="add-form" class="add-form"><label>What did you find?<input required name="title" maxlength="55" placeholder="e.g. Free matcha at the food court" /></label><label>Where is it?<input required name="venue" maxlength="55" placeholder="e.g. Student Centre" /></label><div class="form-row"><label>Category<select name="category"><option>Food</option><option>Music</option><option>Study</option><option>Sport</option><option>Event</option></select></label><label>When?<input required name="time" maxlength="28" placeholder="e.g. Happening now" /></label></div><label>Tell people why it's good <span>(optional)</span><textarea name="description" maxlength="160" placeholder="A small detail makes a great discovery."></textarea></label><div class="location-row"><span>⌖</span><div><b>Near your current location</b><small>Campus, Dubai</small></div><span class="check">✓</span></div><button class="primary" type="submit">${state.online ? "Share with nearby people" : "Save for when you're online"}</button><p class="form-note">${state.online ? "✦ Your discovery will appear in the live community feed." : "☁ This will be safely queued and shared as soon as you're connected."}</p></form></main>`;
+  <form id="add-form" class="add-form"><label>What did you find?<input required name="title" maxlength="55" placeholder="e.g. Free matcha at the food court" /></label><label>Where is it?<input required name="venue" maxlength="55" placeholder="e.g. Student Centre" /></label><div class="form-row"><label>Category<select name="category"><option>Food</option><option>Music</option><option>Study</option><option>Sport</option><option>Event</option></select></label><label>When?<input required name="time" maxlength="28" placeholder="e.g. Happening now" /></label></div><label>Tell people why it's good <span>(optional)</span><textarea name="description" maxlength="160" placeholder="A small detail makes a great discovery."></textarea></label><label>Add a photo <span>(optional)</span><input type="file" id="add-photo-input" name="photo" accept="image/*" capture="environment" /></label><div id="photo-preview" class="photo-preview"></div><div class="location-row"><span>⌖</span><div><b>Near your current location</b><small>Campus, Dubai</small></div><span class="check">✓</span></div><button class="primary" type="submit">${state.online ? "Share with nearby people" : "Save for when you're online"}</button><p class="form-note">${state.online ? "✦ Your discovery will appear in the live community feed." : "☁ This will be safely queued and shared as soon as you're connected."}</p></form></main>`;
 }
 
 function bottomNav() {
@@ -131,6 +166,10 @@ document.addEventListener("click", (event) => {
     toggleReaction(react, alreadyLiked).catch((err) => console.error("toggleReaction failed:", err));
     return;
   }
+  if (event.target.closest("[data-remove-photo]")) {
+    clearPhotoPreview();
+    return;
+  }
   if (event.target.closest("[data-open-campus-map]")) {
     window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("BITS Pilani Dubai Campus"), "_blank", "noopener");
     return;
@@ -139,10 +178,37 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-share]")) showToast("Link copied — invite someone to this vibe!");
 });
 
-document.addEventListener("submit", (event) => {
+// Live thumbnail preview when a photo is picked — deliberately NOT calling
+// render() here, since that would wipe out whatever else the user has
+// already typed into the add-discovery form.
+document.addEventListener("change", (event) => {
+  const input = event.target.closest("#add-photo-input");
+  if (!input) return;
+  const preview = document.getElementById("photo-preview");
+  if (!preview) return;
+  const file = input.files?.[0];
+  if (!file) { preview.innerHTML = ""; return; }
+  const url = URL.createObjectURL(file);
+  preview.innerHTML = `<img src="${url}" alt="Photo preview" /><button type="button" class="remove-photo" data-remove-photo aria-label="Remove photo">✕</button>`;
+});
+
+document.addEventListener("submit", async (event) => {
   if (event.target.id !== "add-form") return;
   event.preventDefault();
-  const data = new FormData(event.target);
+  const form = event.target;
+  const data = new FormData(form);
+  const file = data.get("photo");
+
+  let photoURL = null;
+  if (file && file.size) {
+    try {
+      photoURL = await compressAndEncode(file);
+    } catch (err) {
+      console.error("Photo compression failed:", err);
+      showToast("Couldn't process that photo — posting without it");
+    }
+  }
+
   const item = {
     title: data.get("title"),
     venue: data.get("venue"),
@@ -153,12 +219,14 @@ document.addEventListener("submit", (event) => {
     accent: "orange",
     distance: "Near you",
     people: 1,
-    reactionCount: 0
+    reactionCount: 0,
+    photoURL
   };
   // Firestore handles offline queueing on its own — this call succeeds
   // even with no signal, and syncs automatically once reconnected.
   addDiscovery(item);
-  event.target.reset();
+  form.reset();
+  clearPhotoPreview();
   state.tab = "discover";
   showToast(state.online ? "✨ Shared with people nearby" : "☁ Saved safely — it will sync when online");
   render();
