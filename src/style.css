@@ -32,3 +32,62 @@ header { height: 78px; display: flex; align-items: center; justify-content: spac
 .bottom-nav { position: fixed; width: min(100%, 470px); bottom: 0; left: 50%; transform: translateX(-50%); height: 76px; background: rgba(255,250,246,.94); backdrop-filter: blur(12px); display: flex; justify-content: space-around; align-items: center; border-top: 1px solid #eee7e2; z-index: 5; }.bottom-nav button { color: #938783; min-width: 68px; border: 0; background: none; font-size: 10px; display: grid; gap: 3px; place-items: center; }.bottom-nav button span { font-size: 22px; line-height: 16px; }.bottom-nav button.active { color: #ff5d42; font-weight: 700; }.bottom-nav .nav-add { width: 48px; height: 48px; min-width: 48px; border-radius: 50%; background: #ff5d42; color: #fff; font-size: 31px; line-height: 1; margin-top: -27px; box-shadow: 0 8px 18px rgba(255,93,66,.34); }
 .toast { z-index: 15; position: fixed; bottom: 91px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 40px); background: #2d292b; color: #fff; border-radius: 10px; padding: 11px 14px; font-size: 11px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 @media (min-width: 700px) { body { padding: 18px; background: #efeae4; }.app-shell { min-height: calc(100vh - 36px); border-radius: 26px; box-shadow: 0 18px 60px rgba(55,34,23,.13); }.bottom-nav { bottom: 18px; border-radius: 0 0 26px 26px; } }
+/* --- Photo upload additions (append to the end of src/style.css) --- */
+
+.add-form input[type="file"] {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  margin-top: 0.35rem;
+}
+
+.photo-preview {
+  position: relative;
+  display: inline-block;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.photo-preview:empty {
+  display: none;
+}
+
+.photo-preview img {
+  width: 100%;
+  max-width: 220px;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 12px;
+  display: block;
+}
+
+.photo-preview .remove-photo {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+/* Card feed photo — sits inside the existing .card-visual header block.
+   .card-visual should already be position: relative given the live-pill /
+   confirmed-pill it positions — if not, add that here too. */
+.card-visual.has-photo {
+  padding: 0;
+  overflow: hidden;
+}
+
+.card-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  inset: 0;
+}
