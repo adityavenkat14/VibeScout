@@ -6,6 +6,11 @@ import {
   persistentMultipleTabManager,
   collection,
   addDoc,
+  doc,
+  setDoc,
+  deleteDoc,
+  updateDoc,
+  increment,
   onSnapshot,
   serverTimestamp,
   query,
@@ -92,6 +97,61 @@ export function addDiscovery(item) {
     createdBy: currentUserId,
     createdAt: serverTimestamp(),
   });
+}
+
+/**
+ * Live-subscribe to the current (anonymous) user's saved spots.
+ * Saved spots live at users/{uid}/saved/{discoveryId} — a real Firestore
+ * subcollection, not localStorage — so they're queued and synced offline
+ * the same way discoveries are, and they follow this anonymous identity
+ * across tabs/reloads on this device without any login screen.
+ * Calls `callback` with a Set of saved discovery ids, live.
+ */
+export function watchSavedIds(callback) {
+  let unsubscribeSnapshot = () => {};
+  const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    unsubscribeSnapshot();
+    if (!user) {
+      callback(new Set());
+      return;
+    }
+    const savedRef = collection(db, "users", user.uid, "saved");
+    unsubscribeSnapshot = onSnapshot(
+      savedRef,
+      (snapshot) => callback(new Set(snapshot.docs.map((d) => d.id))),
+      (error) => console.error("watchSavedIds error:", error)
+    );
+  });
+  return () => {
+    unsubscribeSnapshot();
+    unsubscribeAuth();
+  };
+}
+
+/**
+ * Save or un-save a discovery for the current anonymous user.
+ * Works offline — Firestore queues the write and syncs once reconnected,
+ * same guarantee as adding a discovery.
+ */
+export function toggleSaved(discoveryId, isCurrentlySaved) {
+  const uid = currentUserId || auth.currentUser?.uid;
+  if (!uid) return Promise.resolve();
+  const ref = doc(db, "users", uid, "saved", discoveryId);
+  return isCurrentlySaved ? deleteDoc(ref) : setDoc(ref, { savedAt: serverTimestamp() });
+}
+
+/**
+ * Bump (or un-bump) a discovery's live reaction count by ±1.
+ * Uses Firestore's atomic increment() field transform, so concurrent taps
+ * from different people never overwrite each other or lose an update —
+ * and it queues fine offline, applying optimistically to the local cache
+ * and syncing the moment connectivity returns.
+ * Per-device "have I already reacted" state is tracked client-side
+ * (see main.js) since it's just a UI nicety, not shared source of truth.
+ */
+export function toggleReaction(discoveryId, alreadyReacted) {
+  const ref = doc(db, "discoveries", discoveryId);
+  return updateDoc(ref, { reactionCount: increment(alreadyReacted ? -1 : 1) });
 }
 
 export { db, auth };
