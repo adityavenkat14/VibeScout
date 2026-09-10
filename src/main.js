@@ -1,5 +1,5 @@
 import "./style.css";
-import { watchDiscoveries, addDiscovery } from "./firebase.js";
+import { watchDiscoveries, addDiscovery, watchSavedIds, toggleSaved, toggleReaction } from "./firebase.js";
 
 const store = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
@@ -10,8 +10,10 @@ let state = {
   tab: "discover",
   filter: "For you",
   online: navigator.onLine,
+  loading: true, // true until the first Firestore snapshot arrives
   discoveries: [], // now populated live from Firebase, not seeded locally
-  favourites: store.get("vibescout-favourites", []),
+  savedIds: new Set(), // populated live from users/{uid}/saved in Firestore — follows this device's identity
+  liked: new Set(store.get("vibescout-liked", [])), // "did I tap the reaction button" — local UI convenience only
   toast: ""
 };
 
@@ -19,8 +21,24 @@ const app = document.querySelector("#app");
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 
 function persist() {
-  // Only favourites stay local now — discoveries live in Firestore
-  store.set("vibescout-favourites", state.favourites);
+  // Only the "did I tap like" convenience set stays local — saved spots and
+  // discoveries both live in Firestore now, so they survive reinstalls/tabs.
+  store.set("vibescout-liked", [...state.liked]);
+}
+
+function timeAgo(timestamp) {
+  if (!timestamp?.toDate) return null;
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp.toDate().getTime()) / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function isFading(timestamp) {
+  if (!timestamp?.toDate) return false;
+  return (Date.now() - timestamp.toDate().getTime()) / 60000 > 180; // fades after 3 hours
 }
 
 function showToast(message) {
@@ -30,21 +48,30 @@ function showToast(message) {
 }
 
 function favouriteIcon(id) {
-  return state.favourites.includes(id) ? "♥" : "♡";
+  return state.savedIds.has(id) ? "♥" : "♡";
 }
 
 function card(item) {
-  const saved = state.favourites.includes(item.id);
-  return `<article class="vibe-card ${item.accent || "orange"}">
-    <div class="card-visual"><span>${item.emoji || "✨"}</span><div class="visual-glow"></div><span class="live-pill">${item.time || "Just now"}</span></div>
+  const saved = state.savedIds.has(item.id);
+  const liked = state.liked.has(item.id);
+  const reactionCount = item.reactionCount || 0;
+  const confirmed = reactionCount >= 3;
+  const fresh = timeAgo(item.createdAt) || item.time || "Just now";
+  const fading = isFading(item.createdAt);
+  return `<article class="vibe-card ${item.accent || "orange"} ${fading ? "is-fading" : ""}">
+    <div class="card-visual"><span>${item.emoji || "✨"}</span><div class="visual-glow"></div><span class="live-pill">${fresh}</span>${confirmed ? `<span class="confirmed-pill">✓ Confirmed</span>` : ""}</div>
     <div class="card-body">
       <div class="card-meta"><span>${item.category}</span><span>•</span><span>${item.distance || "Near you"}</span></div>
       <div class="card-title-row"><h3>${escapeHtml(item.title)}</h3><button class="heart ${saved ? "is-saved" : ""}" data-save="${item.id}" aria-label="Save ${escapeHtml(item.title)}">${favouriteIcon(item.id)}</button></div>
       <p class="venue">📍 ${escapeHtml(item.venue)}</p>
       <p class="description">${escapeHtml(item.description || "")}</p>
-      <div class="card-footer"><span class="people">◉ ${item.people || 1} people nearby</span><button class="share-button" data-share="${item.id}">Share</button></div>
+      <div class="card-footer"><button class="react-button ${liked ? "is-liked" : ""}" data-react="${item.id}" aria-label="React to ${escapeHtml(item.title)}">🔥 ${reactionCount}</button><button class="share-button" data-share="${item.id}">Share</button></div>
     </div>
   </article>`;
+}
+
+function skeletonCard() {
+  return `<div class="vibe-card skeleton"><div class="card-visual"></div><div class="card-body"><div class="sk-line sk-meta"></div><div class="sk-line sk-title"></div><div class="sk-line sk-desc"></div></div></div>`;
 }
 
 function discoverView() {
@@ -57,12 +84,12 @@ function discoverView() {
     ${!state.online ? `<section class="offline-banner"><span>☁</span><div><b>You're offline</b><small>Showing your cached local finds — anything you add will sync once you're back online</small></div></section>` : `<section class="pulse-banner"><span>✦</span><div><b>Live nearby pulse</b><small>Updates in real time as people nearby discover things</small></div><span class="pulse-dot"></span></section>`}
     <div class="section-head"><h2>Explore nearby</h2><button class="map-button">⌖ Map</button></div>
     <div class="filters">${["For you", "Food", "Music", "Study", "Sport"].map((filter) => `<button data-filter="${filter}" class="filter ${state.filter === filter ? "active" : ""}">${filter}</button>`).join("")}</div>
-    <section class="cards">${filtered.length ? filtered.map(card).join("") : `<div class="empty"><span>🔎</span><h3>No vibes here yet</h3><p>Try another category or add the first find.</p></div>`}</section>
+    <section class="cards">${state.loading ? Array.from({ length: 3 }, skeletonCard).join("") : filtered.length ? filtered.map(card).join("") : `<div class="empty"><span>🔎</span><h3>No vibes here yet</h3><p>Try another category or add the first find.</p></div>`}</section>
   </main>`;
 }
 
 function savedView() {
-  const saved = state.discoveries.filter((x) => state.favourites.includes(x.id));
+  const saved = state.discoveries.filter((x) => state.savedIds.has(x.id));
   return `<main class="saved-page"><section class="simple-hero"><p class="eyebrow">YOUR COLLECTION</p><h1>Saved <em>for later.</em></h1><p>These are always with you, online or off.</p></section><section class="cards">${saved.length ? saved.map(card).join("") : `<div class="empty"><span>♡</span><h3>Nothing saved yet</h3><p>Tap the heart on a vibe you want to revisit.</p><button class="primary" data-tab="discover">Discover nearby</button></div>`}</section></main>`;
 }
 
@@ -86,7 +113,24 @@ document.addEventListener("click", (event) => {
   const filter = event.target.closest("[data-filter]")?.dataset.filter;
   if (filter) { state.filter = filter; render(); return; }
   const save = event.target.closest("[data-save]")?.dataset.save;
-  if (save) { state.favourites = state.favourites.includes(save) ? state.favourites.filter((id) => id !== save) : [...state.favourites, save]; persist(); render(); return; }
+  if (save) {
+    const isSaved = state.savedIds.has(save);
+    // Optimistic — the live users/{uid}/saved listener will confirm this in ~milliseconds,
+    // but flipping locally first keeps the tap feeling instant, online or off.
+    isSaved ? state.savedIds.delete(save) : state.savedIds.add(save);
+    render();
+    toggleSaved(save, isSaved).catch((err) => console.error("toggleSaved failed:", err));
+    return;
+  }
+  const react = event.target.closest("[data-react]")?.dataset.react;
+  if (react) {
+    const alreadyLiked = state.liked.has(react);
+    state.liked = alreadyLiked ? new Set([...state.liked].filter((id) => id !== react)) : new Set([...state.liked, react]);
+    persist();
+    render();
+    toggleReaction(react, alreadyLiked).catch((err) => console.error("toggleReaction failed:", err));
+    return;
+  }
   if (event.target.closest("[data-online]")) { state.online = !state.online; render(); showToast(state.online ? "Back online" : "Offline mode on — your finds are safe"); }
   if (event.target.closest("[data-share]")) showToast("Link copied — invite someone to this vibe!");
 });
@@ -104,7 +148,8 @@ document.addEventListener("submit", (event) => {
     emoji: "✨",
     accent: "orange",
     distance: "Near you",
-    people: 1
+    people: 1,
+    reactionCount: 0
   };
   // Firestore handles offline queueing on its own — this call succeeds
   // even with no signal, and syncs automatically once reconnected.
@@ -123,6 +168,15 @@ if ("serviceWorker" in navigator) window.addEventListener("load", () => navigato
 // then again automatically every time Firestore has new data.
 watchDiscoveries((discoveries) => {
   state.discoveries = discoveries;
+  state.loading = false;
+  render();
+});
+
+// Live subscription to this (anonymous) device's saved spots — real
+// Firestore data, not localStorage, so it's offline-safe and consistent
+// with how discoveries and reactions sync.
+watchSavedIds((savedIds) => {
+  state.savedIds = savedIds;
   render();
 });
 
