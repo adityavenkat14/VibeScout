@@ -1,15 +1,85 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ff5d42" />
-    <meta name="description" content="Discover the local pulse, online or offline." />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <title>VibeScout — The local pulse</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VibeScout</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-left">
+      <h1>VibeScout</h1>
+      <div id="connection-status" class="status-badge online">🟢 Live Sync</div>
+    </div>
+    <div class="header-actions">
+      <button id="map-btn" class="btn btn-secondary">⌖ Map</button>
+      <button id="seed-btn" class="btn btn-secondary" title="Seed sample demo data">⚡ Seed</button>
+      <button id="open-modal-btn" class="btn btn-primary">+ Post Vibe</button>
+    </div>
+  </header>
+
+  <!-- Category Filter Pills -->
+  <nav class="filter-bar">
+    <button class="filter-pill active" data-category="all">All</button>
+    <button class="filter-pill" data-category="food">🍕 Food</button>
+    <button class="filter-pill" data-category="events">🎉 Events</button>
+    <button class="filter-pill" data-category="study">📚 Study</button>
+  </nav>
+
+  <!-- Main Feed Container -->
+  <main class="feed-container">
+    <div id="feed-list" class="feed-list"></div>
+  </main>
+
+  <!-- Post Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Post a Live Discovery</h2>
+        <button id="close-modal-btn" class="close-btn">&times;</button>
+      </div>
+      <form id="discovery-form">
+        <div class="form-group">
+          <label for="post-title">Title / What's happening?</label>
+          <input type="text" id="post-title" required placeholder="e.g., Free Karak & Samosas" />
+        </div>
+
+        <div class="form-group">
+          <label for="post-category">Category</label>
+          <select id="post-category" required>
+            <option value="food">🍕 Food & Drinks</option>
+            <option value="events">🎉 Events & Social</option>
+            <option value="study">📚 Study Spots & Chill</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="post-venue">Venue / Location Name</label>
+          <input type="text" id="post-venue" required placeholder="e.g., Student Activity Center" />
+        </div>
+
+        <div class="form-group">
+          <label for="post-desc">Description</label>
+          <textarea id="post-desc" rows="3" placeholder="Tell people why it's worth checking out right now..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="post-photo">Add Photo (Optional)</label>
+          <input type="file" id="post-photo" accept="image/*" />
+          <div id="photo-preview-container" class="preview-container hidden">
+            <img id="photo-preview" src="" alt="Preview" />
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" id="cancel-btn" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="submit-btn" class="btn btn-primary">Share Spot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
 </html>
